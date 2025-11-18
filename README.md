@@ -9,7 +9,7 @@ Note: Please don't share your API key
 
 ## Work of the project
 1. Download stock data using yfinance package.
-2. Tidy up the data you need to input as a prompt to the Ai Agent.
+2. Tidy up the data you need to input as a prompt to the AI Agent.
 3. Build up your AI Agent with differnet instruction and prompt.
 4. Check if the outcome is what you expect, if not, adjust your data or AI Agent.
 
