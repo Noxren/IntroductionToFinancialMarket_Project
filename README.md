@@ -7,7 +7,7 @@ AI model: Google Gemini <br />
 https://aistudio.google.com/ <br />
 Note: Please don't share your API key 
 
-## Work of the projct:
+## Work of the project
 1. Download stock data using yfinance package.
 2. Tidy up the data you need to input as a prompt to the Ai Agent.
 3. Build up your AI Agent with differnet instruction and prompt.
