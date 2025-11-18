@@ -1,9 +1,13 @@
 # IntroductionToFinancialMarket_Project
 AI Agent in Asset Management
 
-Data Source: yfinance
-AI model: Google Gemini
+Data Source: yfinance <br />
+https://ranaroussi.github.io/yfinance/reference/index.html <br />
+AI model: Google Gemini <br />
+https://aistudio.google.com/ <br />
+Note: Please don't share your API key 
 
+## Work of the projct:
 1. Download stock data using yfinance package.
 2. Tidy up the data you need to input as a prompt to the Ai Agent.
 3. Build up your AI Agent with differnet instruction and prompt.
