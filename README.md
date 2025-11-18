@@ -21,3 +21,4 @@ Note: Please don't share your API key
 7. Prepare for the presentation
 
 ## Basic Structure
+![alt text](https://github.com/Noxren/IntroductionToFinancialMarket_Project/blob/main/Basic%20Structure.jpg?raw=true)
