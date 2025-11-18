@@ -19,3 +19,5 @@ Note: Please don't share your API key
 5. Integrate the Agents and generate a research report.
 6. Working on the group coursework report.
 7. Prepare for the presentation
+
+## Basic Structure
