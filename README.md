@@ -22,4 +22,4 @@ Note: Please don't share your API key
 8. Prepare for the presentation.
 
 ## Basic Structure
-![alt text]([https://github.com/Noxren/IntroductionToFinancialMarket_Project/blob/main/Basic%20Strucutre.jpg])
+![alt text](https://github.com/Noxren/IntroductionToFinancialMarket_Project/blob/main/Basic%20Strucutre.jpg?raw=true)
