@@ -1,6 +1,6 @@
 import pandas as pd
 import yfinance as yf
-import datetime
+import datetime as dt
 import os
 import uvicorn
 
@@ -12,45 +12,34 @@ import agent
 app = FastAPI()
 
 report_storage = {}
+backtest_storage = {}
 
 class TickerRequest(BaseModel):
     ticker: str
 
-# --- 1. 伺服器啟動事件 ---
+# --- 1. Active Server ---
 @app.on_event("startup")
 def startup_event():
-    """
-    伺服器啟動時，自動執行資料處理。
-    這會讀取 financial_data.csv 並生成 financial_ratio.csv。
-    """
-    print("🔄 Server starting... ensuring financial ratios are calculated.")
-    # agent.process_financial_data()
+    print("Server starting... ensuring financial ratios are calculated.")
 
-# --- 2. 基礎端點 ---
+# --- 2. Basic Terminal ---
 @app.get("/")
 def home():
     return {"message": "Stock Analysis API is running"}
 
 @app.get("/api/search")
 def search(keyword: str):
-    """模擬搜尋功能，回傳符合的股票代碼 (對應前端搜尋框)"""
     keyword = keyword.upper()
-    # 這裡可以實作更複雜的搜尋，目前回傳包含關鍵字的範例
     return {"data": [
         {"symbol": keyword, "name": f"{keyword} (User Input)"},
     ]}
 
-# --- 3. AI 分析端點 (Investment Memo) ---
+# --- 3. Investment Memo ---
 @app.post("/api/analyze_ai/{ticker}")
-def analyze_ai_endpoint(ticker: str):
-    """
-    觸發 AI 完整分析流程。
-    這會呼叫 agent.py 中的 run_analysis_workflow。
-    """
+def analyze_ai_endpoint(ticker: str, date: str = None, terminal_growth_rate: float = 0.02):
     try:
-        print(f"🚀 Starting AI analysis workflow for {ticker}...")
-        
-        # 呼叫 Agent 進行分析 (這可能需要一點時間)
+        print(f"Starting AI analysis workflow for {ticker}...")
+
         if ticker == "SHEL":
             fundamental_data = agent.temp_fin_data()
             financial_ratio = agent.temp_fin_ratio()
@@ -58,30 +47,28 @@ def analyze_ai_endpoint(ticker: str):
             fundamental_data = agent.process_fundamental_data(ticker)
             financial_ratio = agent.calculate_financial_ratio(fundamental_data)
         
-        price_data = agent.process_technical_data(ticker)
+        price_data = agent.process_technical_data(ticker, date)
         technical_indicator = agent.calculate_technical_indicator(price_data)
 
-        memo = agent.run_stock_analysis(ticker, fundamental_data, financial_ratio, technical_indicator)
+        memo = agent.run_stock_analysis(date, ticker, fundamental_data, financial_ratio, technical_indicator, terminal_growth_rate)
         
-        # 將結果存入暫存區，標記時間
         report_storage[ticker] = {
-            "date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "date": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
             "financial_ratio": financial_ratio,
+            "price_data": price_data,
             "technical_indicator": technical_indicator,
-            "analysis": memo  # app.py 前端預設讀取 'news_analysis' 欄位來顯示結果
+            "analysis": memo  
         }
         
-        print(f"✅ Analysis for {ticker} completed and stored.")
+        print(f"Analysis for {ticker} completed and stored.")
         return {"status": "success", "message": "Analysis generated"}
         
     except Exception as e:
-        print(f"❌ Error during AI analysis: {e}")
-        # 如果失敗，回傳 500 錯誤給前端
+        print(f"Error during AI analysis: {e}")
         raise HTTPException(status_code=500, detail=f"AI Processing Error: {str(e)}")
 
 @app.get("/api/get_ai_report/{ticker}")
 def get_ai_report(ticker: str):
-    """取得已生成的 AI 報告"""
     report = report_storage.get(ticker)
     if not report:
         raise HTTPException(status_code=404, detail="Ticker not found.")
@@ -93,13 +80,9 @@ def get_ai_report(ticker: str):
         "analysis": memo
     }
 
-# --- 4. 基本面數據端點 (Financial Stats Tab) ---
+# --- 4. Fundamental Analysis ---
 @app.get("/api/fundamental/{ticker}")
 def get_fundamental_data(ticker: str):
-    """
-    讀取 CSV 數據並回傳給前端畫圖。
-    優先讀取計算過比率的 financial_ratio.csv。
-    """
     report = report_storage.get(ticker)
     if not report:
         raise HTTPException(status_code=404, detail="Ticker not found.")
@@ -113,28 +96,90 @@ def get_fundamental_data(ticker: str):
     } 
 
 
-# --- 6. 技術分析端點 (Technical Tab) ---
+# --- 5. Technical Analysis ---
 @app.get("/api/technical/{ticker}")
 def analyze_technical_endpoint(ticker: str):
-    """
-    對應前端 Tab 5 的 'Run Technical Analysis' 按鈕。
-    直接呼叫 agent.py 中的工具函數。
-    """
     report = report_storage.get(ticker)
     if not report:
         raise HTTPException(status_code=404, detail="Ticker not found.")
+    
+    price_data = report.get("price_data")
     technical_indicator = report.get("technical_indicator")
-    if technical_indicator.empty:
+    if technical_indicator.empty or price_data.empty:
         raise HTTPException(status_code=404, detail="Data fetching pending or failed.")
+    
+    price_data = price_data.reset_index()
+    if 'Date' not in price_data.columns and 'index' in price_data.columns:
+        price_data.rename(columns={'index': 'Date'}, inplace=True)
+    price_data = json.loads(price_data.to_json(orient='records', date_format='iso'))
+
     technical_indicator = technical_indicator.reset_index()
     if 'Date' not in technical_indicator.columns and 'index' in technical_indicator.columns:
         technical_indicator.rename(columns={'index': 'Date'}, inplace=True)
     technical_indicator = json.loads(technical_indicator.to_json(orient='records', date_format='iso'))
+
     return {
         "date": report.get("date"),
+        "price_data": price_data,
         "technical_indicator": technical_indicator
     } 
 
+# --- 6. Backtesting ---
+@app.get("/api/backtest/{ticker}")
+def backtesting(ticker: str, date: str = None, terminal_growth_rate: float = 0.02):
+    try:
+        if date is None:
+            valuation_date = dt.date.today() - pd.DateOffset(years=1)
+            date_str = valuation_date.strftime("%Y-%m-%d")
+        else:
+            date_str = date
+            valuation_date = dt.datetime.strptime(date_str, "%Y-%m-%d")
+
+        print(f"Starting AI analysis workflow for {ticker} on {date_str}...")
+
+        if ticker == "SHEL":
+            fundamental_data = agent.temp_fin_data()
+            financial_ratio = agent.temp_fin_ratio()
+        else:
+            fundamental_data = agent.process_fundamental_data(ticker)
+            financial_ratio = agent.calculate_financial_ratio(fundamental_data)
+        
+        price_data = agent.process_technical_data(ticker, date_str)
+        technical_indicator = agent.calculate_technical_indicator(price_data)
+
+        memo = agent.run_stock_analysis(
+            date_str, 
+            ticker, 
+            fundamental_data, 
+            financial_ratio, 
+            technical_indicator, 
+            terminal_growth_rate
+        )
+        
+        storage_key = f"{ticker}_{date_str}"
+        backtest_storage[storage_key] = {
+            "date": date_str,
+            "analysis": memo  
+        }
+        
+        print(f"Backtest stored with key: {storage_key}.")
+        return {"status": "success", "message": "Analysis generated"}
+        
+    except Exception as e:
+        print(f"Error during AI analysis: {e}")
+        raise HTTPException(status_code=500, detail=f"AI Processing Error: {str(e)}")
+
+@app.get("/api/get_backtest_report/{ticker}")
+def get_backtest_report(ticker: str, date: str):
+    storage_key = f"{ticker}_{date}"
+    report = backtest_storage.get(storage_key)
+    if not report:
+        print(f"Failed to find key: {storage_key}")
+        raise HTTPException(status_code=404, detail="Ticker not found.")
+    return {
+        "date": report.get("date"),
+        "analysis": report.get("analysis")
+    }
+
 if __name__ == "__main__":
-    # 啟動伺服器，監聽所有 IP，Port 8000
     uvicorn.run(app, host="0.0.0.0", port=8000)

@@ -27,9 +27,13 @@ import random
 
 # --- 1. MAIN DATA FETCHING ---
 def temp_fin_data():
-    return pd.read_csv("financial_data.csv")
+    data = pd.read_csv("financial_data.csv")
+    data.replace("NA", np.nan)
+    return data
 def temp_fin_ratio():
-    return pd.read_csv("financial_ratio.csv")
+    data = pd.read_csv("financial_ratio.csv")
+    data.replace("NA", np.nan)
+    return data
 
 def process_fundamental_data(target: str):
 
@@ -282,13 +286,12 @@ def calculate_financial_ratio(financial_data: pd.DataFrame):
 
     return financial_ratio
 
-def process_technical_data(target: str):
+def process_technical_data(target: str, end_date: str):
 
     lookback_years = 10
+    end_date = dt.datetime.strptime(end_date, "%Y-%m-%d")
 
     try:
-        #end_date = dt.datetime.now()
-        end_date = pd.to_datetime("2024/12/31")
         start_date = end_date - dt.timedelta(days=lookback_years*365)
         
         ticker = yf.Ticker(target)
@@ -354,6 +357,10 @@ def calculate_technical_indicator(technical_data: pd.DataFrame):
             technical_indicator['Supp_1'] = np.nan
             technical_indicator['Res_1'] = np.nan
 
+        technical_data['Return'] = technical_data['Close'].pct_change()
+        technical_indicator['Volatility'] = technical_data['Return'].rolling(20).std(ddof=1)
+        technical_indicator['Volatility'] = technical_indicator['Volatility'] * np.sqrt(252)
+
         analysis_days = 60
         technical_indicator = technical_indicator.tail(analysis_days)
         technical_indicator = technical_indicator.replace("nan", np.nan)
@@ -370,7 +377,7 @@ def calculate_technical_indicator(technical_data: pd.DataFrame):
 
 # --- 2. CREATING AI AGENT TOOLS & INPUTs ---
 
-def make_competitors_tool(data: pd.DataFrame):
+def make_competitors_tool(financial_ratio_data: pd.DataFrame, date: str):
 
     def competitors_compare(target: str) -> dict:
         """
@@ -386,12 +393,13 @@ def make_competitors_tool(data: pd.DataFrame):
         """
 
         target = target.upper()
+        analysis_date = dt.datetime.strptime(date, "%Y-%m-%d")
 
         try:
 
-            financial_ratio_df = data
-            financial_ratio_df = financial_ratio_df.sort_values(by='fiscalDateEnding', ascending=True)
-            compare_df = financial_ratio_df.drop_duplicates(subset=['comp'], keep='last')
+            financial_ratio_data = financial_ratio_data[financial_ratio_data['fiscalDateEnding'] < (analysis_date - dt.timedelta(days=90))].copy()
+            financial_ratio_data = financial_ratio_data.sort_values(by='fiscalDateEnding', ascending=True)
+            compare_df = financial_ratio_data.drop_duplicates(subset=['comp'], keep='last')
 
             compare_df = compare_df.replace("NaN", np.nan)
             compare_df = compare_df.dropna(axis=1, how='all')
@@ -406,7 +414,7 @@ def make_competitors_tool(data: pd.DataFrame):
          
     return competitors_compare
 
-def make_financial_ratio_tool(data: pd.DataFrame):
+def make_financial_ratio_tool(financial_ratio_data: pd.DataFrame, date: str):
 
     def get_financial_ratio(target: str) -> dict:
         """
@@ -423,11 +431,11 @@ def make_financial_ratio_tool(data: pd.DataFrame):
         """
 
         target = target.upper()
+        analysis_date = dt.datetime.strptime(date, "%Y-%m-%d")
 
         try:
-            financial_ratio_df = data
 
-            target_ratio_df = financial_ratio_df[financial_ratio_df['comp'] == target].copy()
+            target_ratio_df = financial_ratio_data[financial_ratio_data['comp'] == target].copy()
             if target_ratio_df.empty:
                 return {
                     "status": "error", 
@@ -435,8 +443,7 @@ def make_financial_ratio_tool(data: pd.DataFrame):
                 }
             target_ratio_df['fiscalDateEnding'] = pd.to_datetime(target_ratio_df['fiscalDateEnding'])
             target_ratio_df = target_ratio_df.sort_values(by='fiscalDateEnding', ascending=True)
-            #cutoff_date = pd.Timestamp.now() - pd.DateOffset(years=5)
-            cutoff_date = pd.to_datetime("2024/12/31") - pd.DateOffset(years=5)
+            cutoff_date = analysis_date - pd.DateOffset(years=5)
             target_ratio_df = target_ratio_df[target_ratio_df['fiscalDateEnding'] >= cutoff_date]
 
             target_ratio_df = target_ratio_df.replace("NA", np.nan)
@@ -455,7 +462,7 @@ def make_financial_ratio_tool(data: pd.DataFrame):
         
     return get_financial_ratio
 
-def fair_value_calculation(target: str, data: pd.DataFrame) -> str:
+def fair_value_calculation(target: str, financial_data_df: pd.DataFrame, valuation_date: str, terminal_growth_rate: float) -> str:
     """
     Calculates Fair Value using DCF.
     Returns a CLEAN STRING summary for the Aggregator Agent to read directly.
@@ -463,83 +470,49 @@ def fair_value_calculation(target: str, data: pd.DataFrame) -> str:
 
     target = target.upper()
     ticker = yf.Ticker(target)
+    valuation_date = dt.datetime.strptime(valuation_date, "%Y-%m-%d")
 
     lookback_years = 5
-    default_growth_rate_projection = 0.00
+    start_date = valuation_date - dt.timedelta(days=lookback_years*365)
 
     try:
-        estimates = ticker.get_growth_estimates()
-        if estimates is not None and not estimates.empty:
-            growth_rate_projection = estimates.get('stockTrend', {}).get('+1y', default_growth_rate_projection)
-        else:
-            growth_rate_projection = default_growth_rate_projection
-    except (KeyError, AttributeError, TypeError, ValueError) as e:
-        growth_rate_projection = default_growth_rate_projection
-
-    projection_years = 5
-    terminal_growth_rate = 0.00
-    
-    #end_date = dt.datetime.now()
-    end_date = pd.to_datetime("2024/12/31")
-    start_date = end_date - dt.timedelta(days=lookback_years*365)
-    coe = 0.1
-
-    try:
-        ff_data = web.DataReader('F-F_Research_Data_Factors', 'famafrench', start_date, end_date)[0]
+        ff_data = web.DataReader('F-F_Research_Data_Factors', 'famafrench', start_date, valuation_date)[0]
         ff_data = ff_data / 100
         ff_data.index = ff_data.index.to_timestamp().to_period('M')
         
-        stock_hist = ticker.history(start=start_date-pd.DateOffset(months=2), end=end_date, interval='1mo')
+        stock_hist = ticker.history(start=start_date-pd.DateOffset(months=2), end=valuation_date, interval='1mo')
         stock_returns = stock_hist['Close'].pct_change().dropna().to_period('M')
 
-        data = pd.merge(stock_returns, ff_data, left_index=True, right_index=True)
-        data.columns = ['Stock_Return', 'Mkt-RF', 'SMB', 'HML', 'RF']
-        data['Excess_Return'] = data['Stock_Return'] - data['RF']
+        ols_data = pd.merge(stock_returns, ff_data, left_index=True, right_index=True)
+        ols_data.columns = ['Stock_Return', 'Mkt-RF', 'SMB', 'HML', 'RF']
+        ols_data['Excess_Return'] = ols_data['Stock_Return'] - ols_data['RF']
 
-        if len(data) > 24:
-            X = sm.add_constant(data[['Mkt-RF', 'SMB', 'HML']])
-            model = sm.OLS(data['Excess_Return'], X).fit()
+        if len(ols_data) > 24:
+            X = sm.add_constant(ols_data[['Mkt-RF', 'SMB', 'HML']])
+            model = sm.OLS(ols_data['Excess_Return'], X).fit()
 
-            rf_mean = data['RF'].mean() * 12
-            risk_premium = (model.params['Mkt-RF'] * data['Mkt-RF'].mean() + 
-                            model.params['SMB'] * data['SMB'].mean() + 
-                            model.params['HML'] * data['HML'].mean()) * 12
-            coe = rf_mean + risk_premium
-            
+            rf_mean = ols_data['RF'].mean() * 12
+            risk_premium = (model.params['Mkt-RF'] * ols_data['Mkt-RF'].mean() + 
+                            model.params['SMB'] * ols_data['SMB'].mean() + 
+                            model.params['HML'] * ols_data['HML'].mean()) * 12
+            coe = rf_mean + risk_premium     
     except Exception:
         beta = ticker.info.get('beta', 1.0)
         coe = 0.03 + (beta * 0.05)
 
-    # Get data. Adjust it if doing general
     try:
-        financial_data_df = data
-        target_df = financial_data_df[financial_data_df['comp'] == target].copy()
+        financial_data_df['fiscalDateEnding'] = pd.to_datetime(financial_data_df['fiscalDateEnding'])
+        target_df = financial_data_df[(financial_data_df['comp'] == target) & (financial_data_df['fiscalDateEnding'] < (valuation_date-dt.timedelta(days=90)))].copy()
         if target_df.empty:
             return f"Error: Ticker {target} not found in local financial database."
         target_df = target_df.sort_values(by='fiscalDateEnding', ascending=False)
-
-        int_exp = target_df.iloc[0]['interestExpense']
-        debt = target_df.iloc[0]['shortLongTermDebtTotal']
-        tax_rate = target_df['taxRate'].mean()
-        if debt > 0:
-            cod = (int_exp / debt) * (1 - tax_rate)
-        else:
-            cod = 0.00
-
-        shares = ticker.info.get('sharesOutstanding')
-        current_price = ticker.info.get('currentPrice')
-
-        if not shares or not current_price:
-            return f"Error: Could not retrieve live price/shares for {target}."
-
-        market_cap = shares * current_price
-        total_value = market_cap + debt
-        wacc = ((market_cap / total_value) * coe) + ((debt / total_value) * cod)
-        if wacc <= terminal_growth_rate: 
-            wacc = terminal_growth_rate + 0.01
-    
     except Exception as e:
-        return f"Error in valuation calculation: {str(e)}"
+        return f"Error in fetching financial data: {str(e)}"
+    
+    shares = target_df['commonStockSharesOutstanding'].iloc[0]
+    current_price = ticker.history(start=valuation_date-dt.timedelta(days=7), end=valuation_date)['Close'].iloc[-1]
+    if not shares or not current_price:
+            return f"Error: Could not retrieve price/shares for {target}."
 
     net_income = target_df['netIncome']
     fcf = target_df['freeCashFlow']
@@ -547,21 +520,39 @@ def fair_value_calculation(target: str, data: pd.DataFrame) -> str:
     if np.isnan(avg_fcf_conversion) or avg_fcf_conversion < 0:
         return f"Error: Missing or negative FCF data for {target}."
         
-    forward_eps = ticker.info.get('forwardEps') or ticker.info.get('trailingEps')
-    start_fcf_per_share = forward_eps * avg_fcf_conversion
+    latest_eps = target_df['reportedEPS'].iloc[0]
+    start_fcf_per_share = latest_eps * avg_fcf_conversion
 
-    future_fcf_values = []
-    for i in range(1, projection_years + 1):
-        val = start_fcf_per_share * ((1 + growth_rate_projection) ** i)
-        future_fcf_values.append(val)
-    terminal_value = (future_fcf_values[-1] * (1 + terminal_growth_rate)) / (wacc - terminal_growth_rate)
-    discounted_fcfs = sum([val / ((1 + wacc) ** (i + 1)) for i, val in enumerate(future_fcf_values)])
-    discounted_tv = terminal_value / ((1 + wacc) ** projection_years)
+    next_fiscal_date = target_df['fiscalDateEnding'].iloc[0] + pd.DateOffset(years=1)
+    if next_fiscal_date > valuation_date:
+        start_discount_factor = (next_fiscal_date - valuation_date).days / 365
+    else:
+        start_discount_factor = 0
+
+    growth_rate_df = target_df.sort_values(by='fiscalDateEnding', ascending=True)
+    diff = growth_rate_df['netIncome'].diff()
+    prev_abs = growth_rate_df['netIncome'].shift(1).abs()
+    prev_abs = prev_abs.replace(0, np.nan) 
+    growth_rates = diff / prev_abs
+    growth_rate_projection = growth_rates.dropna().mean()
+    print(growth_rate_projection)
+    projection_years = 5
+
+    discounted_fcfs = 0
+    for i in range(projection_years):
+        fcf_val = start_fcf_per_share * ((1 + growth_rate_projection) ** (i + 1))
+        if i == 0 and start_discount_factor != 0:
+            fcf_val = fcf_val * start_discount_factor
+        discounted_fcfs = discounted_fcfs + (fcf_val / ((1 + coe) ** (i + start_discount_factor)))
+        if i == projection_years-1:
+            terminal_fcf_value = fcf_val
+    terminal_value = (terminal_fcf_value * (1 + terminal_growth_rate)) / (coe - terminal_growth_rate)
+    discounted_tv = terminal_value / ((1 + coe) ** (projection_years + start_discount_factor - 1))
     intrinsic_value = discounted_fcfs + discounted_tv
     
     err_tolerence = 0.05
     upside = (intrinsic_value - current_price) / current_price
-    if upside >err_tolerence: status = "UNDERVALUED"
+    if upside > err_tolerence: status = "UNDERVALUED"
     elif upside < -err_tolerence: status = "OVERVALUED"
     else: status = "FAIRLY VALUED"
 
@@ -570,11 +561,11 @@ def fair_value_calculation(target: str, data: pd.DataFrame) -> str:
     - **Status:** {status}
     - **Fair Value:** ${intrinsic_value:.2f} (Current: ${current_price:.2f})
     - **Upside/Downside:** {upside:.1%}
-    - **Key Assumptions:** WACC {wacc:.1%}, {projection_years} Years Avg Growth {growth_rate_projection:.1%}, Terminal Growth {terminal_growth_rate:.1%}
+    - **Key Assumptions:** Cost of Equity {coe:.1%}, {projection_years} Years Avg Growth {growth_rate_projection:.1%}, Terminal Growth {terminal_growth_rate:.1%}
     - **Methodology:** 5-Year DCF with Fama-French/CAPM Cost of Equity.
     """
     
-def make_technical_tool(data: pd.DataFrame):
+def make_technical_tool(technical_data: pd.DataFrame):
 
     def get_technical_analysis(target: str) -> dict:
 
@@ -595,11 +586,9 @@ def make_technical_tool(data: pd.DataFrame):
 
         try:
 
-            technical_indicator = data
-
             return {
                 "status": "success", 
-                "technical_indicator": technical_indicator.to_markdown(index=True)
+                "technical_indicator": technical_data.to_markdown(index=True)
             }
         
         except Exception as e:
@@ -611,37 +600,45 @@ def make_technical_tool(data: pd.DataFrame):
 
 # --- 3. DEFINE AGENT INITIALIZERS ---        
 
-def news_agent_init():
+def news_agent_init(date: str):
+
+    target_dt = dt.datetime.strptime(date, "%Y-%m-%d")
+    start_dt = (target_dt - dt.timedelta(days=14)).strftime("%Y-%m-%d")
+
     return Agent(
     name="GoogleNewsAgent",
     model="gemini-2.5-flash",
-    instruction="""
+    instruction=f"""
     You are a Senior Market Intelligence Analyst. Your goal is to produce a concise, actionable news briefing for a specific stock.
 
+    IMPORTANT: You are looking for HISTORICAL news. You MUST filter your searches to the date range: {start_dt} to {date}.
+
     Step 1: FOUNDATION
-    Use 'google_search' to find the company's latest '10-K business summary' or 'Investor Relations overview'. 
+    Use 'google_search' to find the company's '10-K business summary' or 'Investor Relations overview'. 
     - Goal: Understand strictly how they make money (e.g., "Revenue comes 60% from cloud, 40% from ads").
 
-    Step 2: SENTIMENT SOURCING (CRITICAL: NEWEST DATA ONLY)
-    Use 'google_search' to find news from the *last 14 days*.
-    - Search Query Format: "[Company Ticker] stock news last 2 weeks" or "[Company Name] regulatory filings current month".
+    Step 2: SENTIMENT SOURCING (STRICT DATE ENFORCEMENT)
+    Use 'google_search' to find news strictly between {start_dt} and {date}.
+    **CRITICAL RULE:** ALL your search queries MUST include the date range operator.
+        - INCORRECT Query: "NVDA stock news" (This gets today's news)
+        - CORRECT Query: "NVDA stock news after:{start_dt} before:{date}"
     - Specific focus: Financial reports, Management changes, Lawsuits, or Merge and acquisition.
 
     Step 3: ANALYSIS & MEMO
-    Generate a formatted memo. Do not list links blindly. Group them into:
-    - **Catalysts:** Concrete positive events.
-    - **Risks:** Concrete negative threats.
-    - **Market Sentiment:** Overall mood (Bullish/Bearish/Neutral).
+    Generate a formatted memo based ONLY on news from this specific 2-week window. Do not list links blindly. Group them into:
+    - **Catalysts:** Events from {start_dt} to {date}.
+    - **Risks:** Threats identified in this window.
+    - **Market Sentiment:** Overall mood as of {date} (Bullish/Bearish/Neutral).
 
-    Constraint: If no relevant news exists in the last 14 days, explicitly state: "No significant material news in the last two weeks."
+    Constraint: If no relevant news appears with the 'after: before:' filter, explicitly state: "No significant material news in the last two weeks."
     """,
     tools = [google_search],
     output_key="google_news_arrangement",
 )
 
-def competitors_agent_init(data):
+def competitors_agent_init(data, date: str):
 
-    competitors_tool = make_competitors_tool(data)
+    competitors_tool = make_competitors_tool(data, date)
 
     return Agent(
     name="CompetitorsAgent",
@@ -664,9 +661,9 @@ def competitors_agent_init(data):
     output_key="comparing_competitors",
 )
 
-def financial_ratio_agent_init(data):
+def financial_ratio_agent_init(data, date):
 
-    financial_ratio_tool = make_financial_ratio_tool(data)
+    financial_ratio_tool = make_financial_ratio_tool(data, date)
 
     return Agent(
     name="FinancialRatioAgent",
@@ -765,14 +762,14 @@ def simple_run(runner, prompt_text):
     
     return "Error: No output generated."
 
-def run_stock_analysis(target, fundamental_data, financial_ratio, technical_indicator):
+def run_stock_analysis(date: str, target, fundamental_data, financial_ratio, technical_indicator, terminal_growth_rate=0.00):
 
-    news = news_agent_init()
-    comp = competitors_agent_init(financial_ratio)
-    fin_r = financial_ratio_agent_init(financial_ratio)
+    news = news_agent_init(date)
+    comp = competitors_agent_init(financial_ratio, date)
+    fin_r = financial_ratio_agent_init(financial_ratio, date)
     tech = technical_agent_init(technical_indicator)
     
-    dcf_result = fair_value_calculation(target, fundamental_data)
+    dcf_result = fair_value_calculation(target, fundamental_data, date, terminal_growth_rate)
     
     aggregator =  Agent(
     name="AggregatorAgent",
@@ -792,11 +789,16 @@ def run_stock_analysis(target, fundamental_data, financial_ratio, technical_indi
     **Crucial: If the input contradict each other, explicitly address this conflict in the "Risks" or "Verdict" section.**
 
     STRUCTURE:
-    - **Fair Price:** The valuation model result. **Market Price:** The latest market price for input data.
-    - **Executive Summary:** The "Bottom Line" (Buy/Sell/Hold) and the primary driver.
-    - **Advantages & Disadvantages:** (Balance the growth potential against the financial health).
-    - **Risks:** (Focus on downside scenarios and data conflicts).
-    - **Final Verdict:** Clear recommendation with a target price reference.
+    - **Fair Price:** The calculated fair value from valuation model.   **Market Price:** The current price from valuation model.
+
+    - **Executive Summary:** 
+    The "Bottom Line" (Buy/Sell/Hold) and the primary driver.
+    - **Advantages & Disadvantages:**
+    Balance the growth potential against the financial health.
+    - **Risks:**
+    Focus on downside scenarios and data conflicts.
+    - **Final Verdict:** 
+    Clear recommendation with a target price reference.
 
     TONE:
     Professional, objective, and decisive.
