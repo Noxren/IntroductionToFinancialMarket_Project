@@ -509,19 +509,33 @@ def fair_value_calculation(target: str, financial_data_df: pd.DataFrame, valuati
     except Exception as e:
         return f"Error in fetching financial data: {str(e)}"
     
-    shares = target_df['commonStockSharesOutstanding'].iloc[0]
+    int_exp = target_df.iloc[0]['interestExpense']
+    debt = target_df.iloc[0]['shortLongTermDebtTotal']
+    tax_rate = target_df['taxRate'].mean()
+    if debt > 0:
+        cod = (int_exp / debt) * (1 - tax_rate)
+    else:
+        cod = 0.00
+    
+    shares = target_df[target_df['fiscalDateEnding'] < valuation_date]['commonStockSharesOutstanding'].iloc[0]
     current_price = ticker.history(start=valuation_date-dt.timedelta(days=7), end=valuation_date)['Close'].iloc[-1]
     if not shares or not current_price:
             return f"Error: Could not retrieve price/shares for {target}."
 
+    market_cap = shares * current_price
+    total_value = market_cap + debt
+    wacc = ((market_cap / total_value) * coe) + ((debt / total_value) * cod)
+    if wacc <= terminal_growth_rate: 
+        wacc = terminal_growth_rate + 0.01
+
     net_income = target_df['netIncome']
     fcf = target_df['freeCashFlow']
-    avg_fcf_conversion = (fcf / net_income).replace([np.inf, -np.inf], np.nan).mean()
+    avg_fcf_conversion = fcf.sum() / net_income.sum()
     if np.isnan(avg_fcf_conversion) or avg_fcf_conversion < 0:
         return f"Error: Missing or negative FCF data for {target}."
         
-    latest_eps = target_df['reportedEPS'].iloc[0]
-    start_fcf_per_share = latest_eps * avg_fcf_conversion
+    latest_ni = target_df['netIncome'].iloc[0]
+    start_fcf = latest_ni * avg_fcf_conversion
 
     next_fiscal_date = target_df['fiscalDateEnding'].iloc[0] + pd.DateOffset(years=1)
     if next_fiscal_date > valuation_date:
@@ -530,28 +544,41 @@ def fair_value_calculation(target: str, financial_data_df: pd.DataFrame, valuati
         start_discount_factor = 0
 
     growth_rate_df = target_df.sort_values(by='fiscalDateEnding', ascending=True)
-    diff = growth_rate_df['netIncome'].diff()
-    prev_abs = growth_rate_df['netIncome'].shift(1).abs()
+    diff = growth_rate_df['freeCashFlow'].diff()
+    prev_abs = growth_rate_df['freeCashFlow'].shift(1).abs()
     prev_abs = prev_abs.replace(0, np.nan) 
     growth_rates = diff / prev_abs
-    growth_rate_projection = growth_rates.dropna().mean()
+    n = len(growth_rates)
+    weights = np.arange(1, n + 1)
+    growth_rates_clipped = growth_rates.clip(lower=-0.50, upper=0.50)
+    weighted_sum = np.sum(growth_rates_clipped * weights)
+    total_weight = np.sum(weights)
+    growth_rate_projection = weighted_sum / total_weight
     print(growth_rate_projection)
     projection_years = 5
 
     discounted_fcfs = 0
+    fcf_val = start_fcf
     for i in range(projection_years):
-        fcf_val = start_fcf_per_share * ((1 + growth_rate_projection) ** (i + 1))
-        if i == 0 and start_discount_factor != 0:
-            fcf_val = fcf_val * start_discount_factor
-        discounted_fcfs = discounted_fcfs + (fcf_val / ((1 + coe) ** (i + start_discount_factor)))
+        fcf_val = fcf_val * (1 + growth_rate_projection)
+        if i == 0:
+            if start_discount_factor != 0:
+                first_fcf_val = fcf_val * start_discount_factor
+            else:
+                first_fcf_val = fcf_val
+            discounted_fcfs = discounted_fcfs + (first_fcf_val / ((1 + wacc) ** (i + start_discount_factor)))
+        else:
+            discounted_fcfs = discounted_fcfs + (fcf_val / ((1 + wacc) ** (i + start_discount_factor)))
         if i == projection_years-1:
             terminal_fcf_value = fcf_val
-    terminal_value = (terminal_fcf_value * (1 + terminal_growth_rate)) / (coe - terminal_growth_rate)
-    discounted_tv = terminal_value / ((1 + coe) ** (projection_years + start_discount_factor - 1))
+    terminal_value = (terminal_fcf_value * (1 + terminal_growth_rate)) / (wacc - terminal_growth_rate)
+    discounted_tv = terminal_value / ((1 + wacc) ** (projection_years + start_discount_factor - 1))
     intrinsic_value = discounted_fcfs + discounted_tv
+    fair_stock_value = intrinsic_value - debt + target_df.iloc[0]['cashAndCashEquivalentsAtCarryingValue']
+    fair_stock_price = fair_stock_value / shares
     
     err_tolerence = 0.05
-    upside = (intrinsic_value - current_price) / current_price
+    upside = (fair_stock_price - current_price) / current_price
     if upside > err_tolerence: status = "UNDERVALUED"
     elif upside < -err_tolerence: status = "OVERVALUED"
     else: status = "FAIRLY VALUED"
@@ -559,9 +586,9 @@ def fair_value_calculation(target: str, financial_data_df: pd.DataFrame, valuati
     return f"""
     **DCF VALUATION MODEL RESULTS:**
     - **Status:** {status}
-    - **Fair Value:** ${intrinsic_value:.2f} (Current: ${current_price:.2f})
+    - **Fair Value:** ${fair_stock_price:.2f} (Current: ${current_price:.2f})
     - **Upside/Downside:** {upside:.1%}
-    - **Key Assumptions:** Cost of Equity {coe:.1%}, {projection_years} Years Avg Growth {growth_rate_projection:.1%}, Terminal Growth {terminal_growth_rate:.1%}
+    - **Key Assumptions:** Weighted Average Cost of Capital {wacc:.1%}, {projection_years} Years Avg Growth {growth_rate_projection:.1%}, Terminal Growth {terminal_growth_rate:.1%}
     - **Methodology:** 5-Year DCF with Fama-French/CAPM Cost of Equity.
     """
     
@@ -789,7 +816,7 @@ def run_stock_analysis(date: str, target, fundamental_data, financial_ratio, tec
     **Crucial: If the input contradict each other, explicitly address this conflict in the "Risks" or "Verdict" section.**
 
     STRUCTURE:
-    - **Fair Price:** The calculated fair value from valuation model.   **Market Price:** The current price from valuation model.
+    - **DCF Model Fair Price:** The calculated fair value from valuation model.   **Market Price:** The current price from valuation model.
 
     - **Executive Summary:** 
     The "Bottom Line" (Buy/Sell/Hold) and the primary driver.
