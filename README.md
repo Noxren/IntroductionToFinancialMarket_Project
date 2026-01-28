@@ -30,7 +30,7 @@ Note: Don't share your API key
 
 ## How to implement
 1. Pull the "main" folder
-2. Add "APIKey.py" to the folder and store your API keys (Gemini & Alpha Vantage)
+2. Type your API keys to "APIKey.py" (Gemini & Alpha Vantage)
 3. Open 2 teminals from this folder
 4. The 1st terminal: Type "uvicorn server:app" (backend)
 5. The 2nd terminal: Type "streamlit run app.py" (frontend)
