@@ -26,10 +26,10 @@ Note: Don't share your API key
 8. Prepare for the presentation.
 
 ## Basic Structure
-![alt text](https://github.com/Noxren/IntroductionToFinancialMarket_Project/blob/main/Basic%20Strucutre.jpg?raw=true)
+![alt text](https://github.com/Noxren/IntroductionToFinancialMarket_Project/blob/main/Basic%20Structure.jpg?raw=true)
 
 ## How to implement
-1. Download the "main" folder
+1. Pull the "main" folder
 2. Add "APIKey.py" to the folder and store your API keys (Gemini & Alpha Vantage)
 3. Open 2 teminals from this folder
 4. The 1st terminal: Type "uvicorn server:app" (backend)
