@@ -1,12 +1,13 @@
 # IntroductionToFinancialMarket_Project
 AI Agent in Asset Management
 
-Data Source: 
+Data Source: <br />
 yfinance <br />
 https://ranaroussi.github.io/yfinance/reference/index.html <br />
 Alpha Vantage <br />
 https://www.alphavantage.co/documentation/ <br />
-AI model: 
+
+AI model: <br />
 Google Gemini <br />
 https://aistudio.google.com/ <br />
 Note: Please don't share your API key 
