@@ -29,7 +29,7 @@ Note: Don't share your API key
 ![alt text](https://github.com/Noxren/IntroductionToFinancialMarket_Project/blob/main/Basic%20Structure.jpg?raw=true)
 
 ## How to implement
-1. Pull the "main" folder
+1. Clone the "main" folder
 2. Type your API keys to "APIKey.py" (Gemini & Alpha Vantage)
 3. Open 2 teminals from this folder
 4. The 1st terminal: Type "uvicorn server:app" (backend)
